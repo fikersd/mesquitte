@@ -14,6 +14,7 @@ use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 use crate::{
     protocols::v4::publish::handle_will,
     server::state::GlobalState,
+    store::queue::Queue,
     types::{outgoing::Outgoing, session::Session},
 };
 
@@ -51,15 +52,16 @@ where
     }
 }
 
-pub(super) async fn handle_incoming<T, E>(
+pub(super) async fn handle_incoming<T, E, Q>(
     writer: &mut FramedWrite<T, E>,
     session: &mut Session,
     packet: VariablePacket,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 ) -> io::Result<bool>
 where
     T: AsyncWrite + Unpin,
     E: Encoder<VariablePacket, Error = io::Error>,
+    Q: Queue + 'static,
 {
     log::debug!(
         r#"client#{} receive mqtt client incoming message: {:?}"#,
@@ -123,11 +125,14 @@ where
     Ok(should_stop)
 }
 
-pub(super) async fn receive_outgoing(
+pub(super) async fn receive_outgoing<Q>(
     session: &mut Session,
     packet: Outgoing,
-    global: Arc<GlobalState>,
-) -> (bool, Option<VariablePacket>) {
+    global: Arc<GlobalState<Q>>,
+) -> (bool, Option<VariablePacket>)
+where
+    Q: Queue,
+{
     let mut should_stop = false;
     let resp = match packet {
         Outgoing::Publish(subscribe_qos, packet) => {
@@ -144,7 +149,7 @@ pub(super) async fn receive_outgoing(
                 session.client_id(),
             );
 
-            if let Err(err) = sender.send(session.into()).await {
+            if let Err(err) = sender.send(session.server_packet_id()).await {
                 log::error!(
                     "handle outgoing client#{} send session state: {err}",
                     session.client_id(),
@@ -177,15 +182,16 @@ pub(super) async fn receive_outgoing(
     (should_stop, resp)
 }
 
-pub(super) async fn handle_outgoing<T, E>(
+pub(super) async fn handle_outgoing<T, E, Q>(
     writer: &mut FramedWrite<T, E>,
     session: &mut Session,
     packet: Outgoing,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 ) -> bool
 where
     T: AsyncWrite + Unpin,
     E: Encoder<VariablePacket, Error = io::Error>,
+    Q: Queue,
 {
     let (should_stop, resp) = receive_outgoing(session, packet, global).await;
     if let Some(packet) = resp {
@@ -199,11 +205,13 @@ where
     should_stop
 }
 
-pub(super) async fn handle_clean_session(
+pub(super) async fn handle_clean_session<Q>(
     mut session: Session,
     mut outgoing_rx: mpsc::Receiver<Outgoing>,
-    global: Arc<GlobalState>,
-) {
+    global: Arc<GlobalState<Q>>,
+) where
+    Q: Queue + 'static,
+{
     log::debug!(
         r#"client#{} handle offline:
  clean session : {}
@@ -233,15 +241,16 @@ pub(super) async fn handle_clean_session(
     }
 }
 
-async fn write_to_client<T, E>(
+async fn write_to_client<T, E, Q>(
     mut session: Session,
     mut writer: FramedWrite<T, E>,
     mut incoming_rx: mpsc::Receiver<VariablePacket>,
     mut outgoing_rx: mpsc::Receiver<Outgoing>,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 ) where
     T: AsyncWrite + Unpin,
     E: Encoder<VariablePacket, Error = io::Error>,
+    Q: Queue + Send + 'static,
 {
     if session.keep_alive() > 0 {
         let half_interval = Duration::from_millis(session.keep_alive() as u64 * 500);
@@ -255,7 +264,7 @@ async fn write_to_client<T, E>(
                         Ok(false) => continue,
                         Err(err) => {
                             log::error!("handle incoming failed: {err}");
-                            break;
+                            return;
                         },
                     }
                     None => {
@@ -312,10 +321,11 @@ async fn write_to_client<T, E>(
     tokio::spawn(handle_clean_session(session, outgoing_rx, global.clone()));
 }
 
-pub async fn read_write_loop<R, W>(reader: R, writer: W, global: Arc<GlobalState>)
+pub async fn read_write_loop<R, W, Q>(reader: R, writer: W, global: Arc<GlobalState<Q>>)
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
+    Q: Queue + Send + 'static,
 {
     let mut frame_reader = FramedRead::new(reader, MqttDecoder::new());
     let mut frame_writer = FramedWrite::new(writer, MqttEncoder::new());
@@ -344,7 +354,7 @@ where
         }
     };
 
-    let packets = get_unsent_outgoing_packet(&mut session);
+    let packets = get_unsent_outgoing_packet(&mut session, global.clone());
     for pkt in packets {
         if let Err(err) = frame_writer.send(pkt).await {
             log::error!("write pending packet failed: {err}");

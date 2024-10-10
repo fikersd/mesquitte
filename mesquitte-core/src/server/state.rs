@@ -7,13 +7,19 @@ use tokio::{
     time,
 };
 
-use crate::types::{
-    client::AddClientReceipt, outgoing::Outgoing, retain_table::RetainTable,
-    topic_router::RouteTable,
+use crate::{
+    store::queue::Queue,
+    types::{
+        client::AddClientReceipt, outgoing::Outgoing, retain_table::RetainTable,
+        topic_router::RouteTable,
+    },
 };
 
 #[derive(Default)]
-pub struct GlobalState {
+pub struct GlobalState<Q>
+where
+    Q: Queue,
+{
     // TODO: metrics?
     // TODO: config content
     // max qos
@@ -33,15 +39,22 @@ pub struct GlobalState {
     // min keep alive
     // config: Arc<Config>,
     clients: DashMap<String, mpsc::Sender<Outgoing>, ahash::RandomState>,
+    packets_queue: Q,
 
     route_table: RouteTable,
     retain_table: RetainTable,
 }
 
-impl GlobalState {
-    pub fn new() -> Self {
+impl<Q> GlobalState<Q>
+where
+    Q: Queue,
+{
+    pub fn new(packets_queue: Q) -> Self {
         Self {
-            ..Default::default()
+            packets_queue,
+            clients: Default::default(),
+            route_table: Default::default(),
+            retain_table: Default::default(),
         }
     }
 
@@ -105,6 +118,10 @@ impl GlobalState {
 
     pub fn retain_table(&self) -> &RetainTable {
         &self.retain_table
+    }
+
+    pub fn packets_queue(&self) -> &Q {
+        &self.packets_queue
     }
 
     pub fn route_table(&self) -> &RouteTable {

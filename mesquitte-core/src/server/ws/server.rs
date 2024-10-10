@@ -7,17 +7,26 @@ use tungstenite::{handshake::server::ErrorResponse, http};
 
 #[cfg(feature = "wss")]
 use crate::server::config::TlsConfig;
-use crate::server::{process_client, state::GlobalState};
+use crate::{
+    server::{process_client, state::GlobalState},
+    store::queue::Queue,
+};
 
 use super::{ws_stream::WsByteStream, Error};
 
-pub struct WsServer {
+pub struct WsServer<Q>
+where
+    Q: Queue,
+{
     inner: TcpListener,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 }
 
-impl WsServer {
-    pub async fn bind(addr: SocketAddr, global: Arc<GlobalState>) -> Result<Self, Error> {
+impl<Q> WsServer<Q>
+where
+    Q: Queue + Send + 'static,
+{
+    pub async fn bind(addr: SocketAddr, global: Arc<GlobalState<Q>>) -> Result<Self, Error> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self {
             inner: listener,

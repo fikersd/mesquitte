@@ -1,6 +1,4 @@
-use super::session::SessionState;
-
 pub enum AddClientReceipt {
-    Present(SessionState),
+    Present(u16),
     New,
 }

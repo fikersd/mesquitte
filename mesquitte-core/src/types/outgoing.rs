@@ -3,7 +3,7 @@ use std::fmt::Display;
 use mqtt_codec_kit::common::QualityOfService;
 use tokio::sync::mpsc::Sender;
 
-use super::{publish::PublishMessage, session::SessionState};
+use super::publish::PublishMessage;
 
 #[derive(PartialEq)]
 pub enum KickReason {
@@ -20,6 +20,6 @@ impl Display for KickReason {
 
 pub enum Outgoing {
     Publish(QualityOfService, Box<PublishMessage>),
-    Online(Sender<SessionState>),
+    Online(Sender<u16>),
     Kick(KickReason),
 }

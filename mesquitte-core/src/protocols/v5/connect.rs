@@ -80,7 +80,7 @@ protocol level : {:?}
         (false, packet.client_identifier().to_owned())
     };
 
-    let mut session = Session::new(client_id, assigned_client_id, 12, 1024, 10);
+    let mut session = Session::new(client_id, assigned_client_id, 12);
     session.set_clean_session(packet.clean_session());
     session.set_username(packet.username().map(|name| name.to_owned()));
     session.set_keep_alive(packet.keep_alive());
@@ -218,9 +218,9 @@ protocol level : {:?}
     let receipt = global.add_client(session.client_id(), outgoing_tx).await;
 
     let session_present = match receipt {
-        AddClientReceipt::Present(old_state) => {
+        AddClientReceipt::Present(server_packet_id) => {
             if !session.clean_session() {
-                session.copy_from_state(old_state);
+                session.set_server_packet_id(server_packet_id);
                 true
             } else {
                 log::info!(

@@ -2,20 +2,29 @@ use std::{net::SocketAddr, sync::Arc};
 
 use s2n_quic::{provider::tls, Server};
 
-use crate::server::{process_client, state::GlobalState};
+use crate::{
+    server::{process_client, state::GlobalState},
+    store::queue::Queue,
+};
 
 use super::Error;
 
-pub struct QuicServer {
+pub struct QuicServer<Q>
+where
+    Q: Queue,
+{
     inner: Server,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 }
 
-impl QuicServer {
+impl<Q> QuicServer<Q>
+where
+    Q: Queue + Send + 'static,
+{
     pub fn bind<T: tls::TryInto>(
         addr: SocketAddr,
         tls: T,
-        global: Arc<GlobalState>,
+        global: Arc<GlobalState<Q>>,
     ) -> Result<Self, Error>
     where
         Error: From<<T as tls::TryInto>::Error>,

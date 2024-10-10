@@ -4,17 +4,26 @@ use tokio::net::TcpListener;
 
 #[cfg(feature = "mqtts")]
 use crate::server::config::TlsConfig;
-use crate::server::{process_client, state::GlobalState};
+use crate::{
+    server::{process_client, state::GlobalState},
+    store::queue::Queue,
+};
 
 use super::Error;
 
-pub struct TcpServer {
+pub struct TcpServer<Q>
+where
+    Q: Queue,
+{
     inner: TcpListener,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
 }
 
-impl TcpServer {
-    pub async fn bind(addr: SocketAddr, global: Arc<GlobalState>) -> Result<Self, Error> {
+impl<Q> TcpServer<Q>
+where
+    Q: Queue + Send + 'static,
+{
+    pub async fn bind(addr: SocketAddr, global: Arc<GlobalState<Q>>) -> Result<Self, Error> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self {
             inner: listener,

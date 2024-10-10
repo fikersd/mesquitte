@@ -5,15 +5,18 @@ use mqtt_codec_kit::v4::packet::{
     VariablePacket,
 };
 
-use crate::{server::state::GlobalState, types::session::Session};
+use crate::{server::state::GlobalState, store::queue::Queue, types::session::Session};
 
 use super::publish::receive_outgoing_publish;
 
-pub(super) fn handle_subscribe(
+pub(super) fn handle_subscribe<Q>(
     session: &mut Session,
     packet: SubscribePacket,
-    global: Arc<GlobalState>,
-) -> Vec<VariablePacket> {
+    global: Arc<GlobalState<Q>>,
+) -> Vec<VariablePacket>
+where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} received a subscribe packet:
 packet id : {}
@@ -51,11 +54,14 @@ packet id : {}
     queue.into()
 }
 
-pub(super) fn handle_unsubscribe(
+pub(super) fn handle_unsubscribe<Q>(
     session: &mut Session,
     packet: &UnsubscribePacket,
-    global: Arc<GlobalState>,
-) -> UnsubackPacket {
+    global: Arc<GlobalState<Q>>,
+) -> UnsubackPacket
+where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} received a unsubscribe packet:
 packet id : {}

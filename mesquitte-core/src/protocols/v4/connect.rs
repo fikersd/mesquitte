@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     server::state::GlobalState,
+    store::queue::Queue,
     types::{
         client::AddClientReceipt,
         outgoing::Outgoing,
@@ -19,10 +20,13 @@ use crate::{
     },
 };
 
-pub(super) async fn handle_connect(
+pub(super) async fn handle_connect<Q>(
     packet: ConnectPacket,
-    global: Arc<GlobalState>,
-) -> Result<(ConnackPacket, Session, mpsc::Receiver<Outgoing>), ConnackPacket> {
+    global: Arc<GlobalState<Q>>,
+) -> Result<(ConnackPacket, Session, mpsc::Receiver<Outgoing>), ConnackPacket>
+where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} received a connect packet:
 protocol level : {:?}
@@ -84,7 +88,7 @@ protocol level : {:?}
     // TODO: config: inflight message timeout
     // TODO: config: max packet size
 
-    let mut session = Session::new(client_id, assigned_client_id, 12, 1024, 10);
+    let mut session = Session::new(client_id, assigned_client_id, 12);
     session.set_clean_session(packet.clean_session());
     session.set_username(packet.username().map(|name| name.to_owned()));
     session.set_keep_alive(packet.keep_alive());
@@ -130,9 +134,9 @@ protocol level : {:?}
     let receipt = global.add_client(session.client_id(), outgoing_tx).await;
 
     let session_present = match receipt {
-        AddClientReceipt::Present(old_state) => {
+        AddClientReceipt::Present(server_packet_id) => {
             if !session.clean_session() {
-                session.copy_from_state(old_state);
+                session.set_server_packet_id(server_packet_id);
                 true
             } else {
                 log::info!(

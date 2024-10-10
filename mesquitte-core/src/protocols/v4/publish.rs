@@ -1,4 +1,4 @@
-use std::{cmp, sync::Arc};
+use std::{cmp, io, sync::Arc};
 
 use mqtt_codec_kit::{
     common::{
@@ -12,6 +12,7 @@ use mqtt_codec_kit::{
 
 use crate::{
     server::state::GlobalState,
+    store::queue::Queue,
     types::{
         outgoing::Outgoing,
         publish::PublishMessage,
@@ -19,11 +20,14 @@ use crate::{
     },
 };
 
-pub(super) async fn handle_publish(
+pub(super) async fn handle_publish<Q>(
     session: &mut Session,
     packet: PublishPacket,
-    global: Arc<GlobalState>,
-) -> (bool, Option<VariablePacket>) {
+    global: Arc<GlobalState<Q>>,
+) -> io::Result<(bool, Option<VariablePacket>)>
+where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} received a publish packet:
 topic name : {:?}
@@ -40,7 +44,7 @@ topic name : {:?}
     let topic_name = packet.topic_name();
     if topic_name.is_empty() {
         log::debug!("Publish topic name cannot be empty");
-        return (true, Some(DisconnectPacket::new().into()));
+        return Ok((true, Some(DisconnectPacket::new().into())));
     }
 
     if topic_name.starts_with(SHARED_PREFIX)
@@ -48,41 +52,48 @@ topic name : {:?}
         || topic_name.contains(MATCH_ONE_STR)
     {
         log::debug!("invalid topic name: {:?}", topic_name);
-        return (true, Some(DisconnectPacket::new().into()));
+        return Ok((true, Some(DisconnectPacket::new().into())));
     }
     if packet.qos() == QoSWithPacketIdentifier::Level0 && packet.dup() {
         log::debug!("invalid duplicate flag in QoS 0 publish message");
-        return (true, Some(DisconnectPacket::new().into()));
+        return Ok((true, Some(DisconnectPacket::new().into())));
     }
 
     match packet.qos() {
         QoSWithPacketIdentifier::Level0 => {
             dispatch_publish(session, packet.into(), global).await;
-            (false, None)
+            Ok((false, None))
         }
         QoSWithPacketIdentifier::Level1(packet_id) => {
             if !packet.dup() {
                 dispatch_publish(session, packet.into(), global).await;
             }
-            (false, Some(PubackPacket::new(packet_id).into()))
+            Ok((false, Some(PubackPacket::new(packet_id).into())))
         }
         QoSWithPacketIdentifier::Level2(packet_id) => {
             if !packet.dup() {
-                session
-                    .pending_packets()
-                    .push_incoming(packet_id, packet.into());
+                if let Err(err) = global
+                    .packets_queue()
+                    .push_incoming(session.client_id(), packet_id, packet.into())
+                    .await
+                {
+                    log::error!("client#");
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
             }
-            (false, Some(PubrecPacket::new(packet_id).into()))
+            Ok((false, Some(PubrecPacket::new(packet_id).into())))
         }
     }
 }
 
 // Dispatch a publish message from client or will to matched clients
-pub(super) async fn dispatch_publish(
+pub(super) async fn dispatch_publish<Q>(
     session: &mut Session,
     packet: PublishMessage,
-    global: Arc<GlobalState>,
-) {
+    global: Arc<GlobalState<Q>>,
+) where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} dispatch publish message:
 topic name : {:?}
@@ -139,11 +150,14 @@ topic name : {:?}
     }
 }
 
-pub(super) async fn handle_pubrel(
+pub(super) async fn handle_pubrel<Q>(
     session: &mut Session,
-    global: Arc<GlobalState>,
+    global: Arc<GlobalState<Q>>,
     pid: u16,
-) -> PubcompPacket {
+) -> PubcompPacket
+where
+    Q: Queue,
+{
     log::debug!(
         "client#{} received a pubrel packet, id : {}",
         session.client_id(),
@@ -242,7 +256,10 @@ pub(super) fn handle_pubcomp(session: &mut Session, pid: u16) {
     session.pending_packets().clean_outgoing();
 }
 
-pub(super) async fn handle_will(session: &mut Session, global: Arc<GlobalState>) {
+pub(super) async fn handle_will<Q>(session: &mut Session, global: Arc<GlobalState<Q>>)
+where
+    Q: Queue,
+{
     log::debug!(
         r#"client#{} handle last will:
 client side disconnected : {}
@@ -260,7 +277,13 @@ server side disconnected : {}
     }
 }
 
-pub(crate) fn get_unsent_outgoing_packet(session: &mut Session) -> Vec<PublishPacket> {
+pub(crate) fn get_unsent_outgoing_packet<Q>(
+    session: &mut Session,
+    global: Arc<GlobalState<Q>>,
+) -> Vec<PublishPacket>
+where
+    Q: Queue,
+{
     let mut packets = Vec::new();
     let mut start_idx = 0;
     while let Some((idx, msg)) = session

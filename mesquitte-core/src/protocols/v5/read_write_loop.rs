@@ -139,7 +139,7 @@ pub(super) async fn receive_outgoing(
                 session.client_id(),
             );
 
-            if let Err(err) = sender.send(session.into()).await {
+            if let Err(err) = sender.send(session.server_packet_id()).await {
                 log::error!(
                     "handle outgoing client#{} send session state: {err}",
                     session.client_id(),
