@@ -2,71 +2,7 @@ use std::{cmp, collections::VecDeque, time::SystemTime};
 
 use mqtt_codec_kit::common::QualityOfService;
 
-use super::publish::PublishMessage;
-
-pub struct OutgoingPublishPacket {
-    packet_id: u16,
-    subscribe_qos: QualityOfService,
-    message: PublishMessage,
-    added_at: u64,
-    pubrec_at: Option<u64>,
-    pubcomp_at: Option<u64>,
-}
-
-impl OutgoingPublishPacket {
-    fn new(packet_id: u16, subscribe_qos: QualityOfService, message: PublishMessage) -> Self {
-        Self {
-            packet_id,
-            message,
-            subscribe_qos,
-            added_at: get_unix_ts(),
-            pubrec_at: None,
-            pubcomp_at: None,
-        }
-    }
-
-    pub fn packet_id(&self) -> u16 {
-        self.packet_id
-    }
-
-    pub fn subscribe_qos(&self) -> QualityOfService {
-        self.subscribe_qos
-    }
-
-    pub fn final_qos(&self) -> QualityOfService {
-        cmp::min(self.subscribe_qos, self.message.qos())
-    }
-
-    pub fn message(&self) -> &PublishMessage {
-        &self.message
-    }
-}
-
-pub struct IncomingPublishPacket {
-    message: PublishMessage,
-    packet_id: u16,
-    receive_at: u64,
-    deliver_at: Option<u64>,
-}
-
-impl IncomingPublishPacket {
-    fn new(packet_id: u16, message: PublishMessage) -> Self {
-        Self {
-            message,
-            packet_id,
-            receive_at: get_unix_ts(),
-            deliver_at: None,
-        }
-    }
-
-    pub fn message(&self) -> &PublishMessage {
-        &self.message
-    }
-
-    pub fn packet_id(&self) -> u16 {
-        self.packet_id
-    }
-}
+use super::publish::{IncomingPublishPacket, OutgoingPublishPacket, PublishMessage};
 
 pub struct PendingPackets {
     max_inflight: u16,
@@ -132,9 +68,9 @@ impl PendingPackets {
         let current_inflight = cmp::min(self.max_inflight.into(), self.outgoing_packets.len());
         for idx in 0..current_inflight {
             let outgoing_packet = self.outgoing_packets.get_mut(idx).expect("pubrec packet");
-            if outgoing_packet.packet_id.eq(&target_pid) {
-                outgoing_packet.message.set_dup();
-                outgoing_packet.pubrec_at = Some(get_unix_ts())
+            if outgoing_packet.packet_id().eq(&target_pid) {
+                outgoing_packet.get_mut_message().set_dup();
+                outgoing_packet.renew_pubrec_at();
             }
         }
         false
@@ -149,14 +85,14 @@ impl PendingPackets {
         let current_inflight = cmp::min(max_inflight, packets.len());
         for idx in 0..current_inflight {
             let outgoing_packet = packets.get_mut(idx).expect("release outgoing packet");
-            if outgoing_packet.packet_id.eq(&target_pid) {
+            if outgoing_packet.packet_id().eq(&target_pid) {
                 match qos {
                     QualityOfService::Level1 => {
-                        outgoing_packet.pubcomp_at = Some(get_unix_ts());
+                        outgoing_packet.renew_pubcomp_at();
                         return true;
                     }
                     QualityOfService::Level2 => {
-                        outgoing_packet.pubcomp_at = Some(get_unix_ts());
+                        outgoing_packet.renew_pubcomp_at();
                         return true;
                     }
                     _ => {}
@@ -201,7 +137,7 @@ impl PendingPackets {
         let mut start_idx = 0;
 
         while let Some(packet) = self.incoming_packets.get(start_idx) {
-            if packet.deliver_at.is_some() || now_ts >= self.timeout + packet.receive_at {
+            if packet.deliver_at().is_some() || now_ts >= self.timeout + packet.receive_at() {
                 self.incoming_packets.pop_front();
                 changed = true;
             }
@@ -221,21 +157,21 @@ impl PendingPackets {
 
         while let Some(packet) = self.outgoing_packets.get(start_idx) {
             start_idx += 1;
-            if packet.pubcomp_at.is_some() {
+            if packet.pubcomp_at().is_some() {
                 self.outgoing_packets.pop_front();
                 changed = true;
                 continue;
             }
 
-            if QualityOfService::Level0.eq(&packet.message.qos()) {
+            if QualityOfService::Level0.eq(&packet.message().qos()) {
                 self.outgoing_packets.pop_front();
                 changed = true;
                 continue;
             }
 
-            let last_packet_at = match packet.pubrec_at {
+            let last_packet_at = match packet.pubrec_at() {
                 Some(pubrec_at) => pubrec_at,
-                None => packet.added_at,
+                None => packet.added_at(),
             };
 
             if now_ts >= self.timeout + last_packet_at {
@@ -259,13 +195,13 @@ impl PendingPackets {
         let mut next_idx = None;
         for idx in start_idx..current_inflight {
             let packet = self.incoming_packets.get_mut(idx).expect("incoming packet");
-            if packet.deliver_at.is_some() {
+            if packet.deliver_at().is_some() {
                 continue;
             }
 
-            if now_ts <= self.timeout + packet.receive_at {
+            if now_ts <= self.timeout + packet.receive_at() {
                 next_idx = Some(idx);
-                packet.deliver_at = Some(get_unix_ts());
+                packet.renew_deliver_at();
                 break;
             }
         }
@@ -286,18 +222,18 @@ impl PendingPackets {
         let mut next_idx = None;
         for idx in start_idx..current_inflight {
             let packet = self.outgoing_packets.get_mut(idx).expect("outgoing packet");
-            if packet.pubcomp_at.is_some() {
+            if packet.pubcomp_at().is_some() {
                 continue;
             }
 
-            let last_packet_at = match packet.pubrec_at {
+            let last_packet_at = match packet.pubrec_at() {
                 Some(pubrec_at) => pubrec_at,
-                None => packet.added_at,
+                None => packet.added_at(),
             };
 
             if now_ts <= self.timeout + last_packet_at {
                 next_idx = Some(idx);
-                packet.message.set_dup();
+                packet.get_mut_message().set_dup();
                 break;
             }
         }
