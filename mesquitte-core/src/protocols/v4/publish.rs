@@ -74,7 +74,7 @@ topic name : {:?}
             if !packet.dup() {
                 if let Err(err) = global
                     .packets_queue()
-                    .push_incoming(session.client_id(), packet_id, packet.into())
+                    .push_qos2_back(session.client_id(), packet_id, packet.into())
                     .await
                 {
                     log::error!("client#");

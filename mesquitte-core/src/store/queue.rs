@@ -8,7 +8,8 @@ pub trait Queue: Sized + Send + Sync {
     type Error: Debug;
 
     /// Push a incoming packet into queue, return if the queue is full.
-    fn push_incoming(
+    /// only QoS2
+    fn push_qos2_back(
         &self,
         client_id: &str,
         packet_id: u16,
@@ -16,7 +17,7 @@ pub trait Queue: Sized + Send + Sync {
     ) -> impl Future<Output = Result<bool, Self::Error>>;
 
     /// Push a outgoing packet into queue, return if the queue is full.
-    fn push_outgoing(
+    fn push_outgoing_back(
         &self,
         client_id: &str,
         packet_id: u16,

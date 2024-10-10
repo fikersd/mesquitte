@@ -13,7 +13,7 @@ pub struct MemoryQueue {
     max_inflight: u16,
     // The ack packet timeout, when reached resent the packet
     timeout: u64,
-    incoming_packets: Mutex<HashMap<String, VecDeque<IncomingPublishPacket>>>,
+    qos2_packets: Mutex<HashMap<String, VecDeque<IncomingPublishPacket>>>,
     outgoing_packets: Mutex<HashMap<String, VecDeque<OutgoingPublishPacket>>>,
 }
 
@@ -22,7 +22,7 @@ impl MemoryQueue {
         Self {
             max_inflight,
             timeout,
-            incoming_packets: Default::default(),
+            qos2_packets: Default::default(),
             outgoing_packets: Default::default(),
         }
     }
@@ -39,13 +39,13 @@ impl MemoryQueue {
 impl Queue for MemoryQueue {
     type Error = ();
 
-    async fn push_incoming(
+    async fn push_qos2_back(
         &self,
         client_id: &str,
         packet_id: u16,
         message: crate::types::publish::PublishMessage,
     ) -> Result<bool, Self::Error> {
-        let mut incoming_packets = self.incoming_packets.lock();
+        let mut incoming_packets = self.qos2_packets.lock();
         let packets = incoming_packets
             .entry(client_id.to_string())
             .or_insert_with(VecDeque::new);
@@ -62,7 +62,7 @@ impl Queue for MemoryQueue {
         Ok(false)
     }
 
-    async fn push_outgoing(
+    async fn push_outgoing_back(
         &self,
         client_id: &str,
         packet_id: u16,
@@ -148,7 +148,7 @@ impl Queue for MemoryQueue {
     }
 
     async fn clean_incoming(&self, client_id: &str) -> Result<(), Self::Error> {
-        if let Some(queue) = self.incoming_packets.lock().get_mut(client_id) {
+        if let Some(queue) = self.qos2_packets.lock().get_mut(client_id) {
             let mut changed = false;
             let now_ts = get_unix_ts();
             if let Some(pos) = queue.iter().position(|packet| {
@@ -189,7 +189,7 @@ impl Queue for MemoryQueue {
         &self,
         client_id: &str,
     ) -> Result<Option<Vec<IncomingPublishPacket>>, Self::Error> {
-        match self.incoming_packets.lock().get_mut(client_id) {
+        match self.qos2_packets.lock().get_mut(client_id) {
             Some(queue) => {
                 let now_ts = get_unix_ts();
                 let mut ret = Vec::new();
@@ -229,7 +229,7 @@ impl Queue for MemoryQueue {
     }
 
     async fn remove(&self, client_id: &str) -> Result<(), Self::Error> {
-        self.incoming_packets.lock().remove(client_id);
+        self.qos2_packets.lock().remove(client_id);
         self.outgoing_packets.lock().remove(client_id);
         Ok(())
     }
