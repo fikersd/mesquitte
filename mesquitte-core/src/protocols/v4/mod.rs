@@ -298,14 +298,14 @@ where
     }
 }
 
-pub struct WriteLoop<'a, T, E, S> {
+pub struct WriteLoop<T, E, S: 'static> {
     writer: FramedWrite<T, E>,
     client_id: String,
     write_rx: AsyncReceiver<WritePacket>,
-    storage: &'a Storage<S>,
+    storage: &'static Storage<S>,
 }
 
-impl<'a, T, E, S> WriteLoop<'a, T, E, S>
+impl<T, E, S> WriteLoop<T, E, S>
 where
     T: AsyncWrite + Unpin,
     E: Encoder<VariablePacket, Error = io::Error>,
@@ -315,7 +315,7 @@ where
         writer: FramedWrite<T, E>,
         client_id: String,
         write_rx: AsyncReceiver<WritePacket>,
-        storage: &'a Storage<S>,
+        storage: &'static Storage<S>,
     ) -> Self {
         Self {
             writer,
